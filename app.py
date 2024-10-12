@@ -9,62 +9,75 @@ from transformers import BartTokenizer, BartForConditionalGeneration, AutoTokeni
 from datetime import datetime
 from botocore.exceptions import NoCredentialsError, ClientError
 
+# Access AWS credentials from Streamlit secrets
+aws_access_key = st.secrets["AWS_ACCESS_KEY_ID"]
+aws_secret_key = st.secrets["AWS_SECRET_ACCESS_KEY"]
+
+# Initialize S3 client with credentials from secrets
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=aws_access_key,
+    aws_secret_access_key=aws_secret_key
+)
+
 # Initialize S3 client
 s3_client = boto3.client('s3')
 s3_bucket = "amadeochat"
 
-# Function to download all files from a given S3 prefix (directory)
+# Function to download files only if they don't exist locally
 def download_directory_from_s3(s3_bucket, s3_prefix, local_dir):
-    os.makedirs(local_dir, exist_ok=True)  # Create local directory if it doesn't exist
+    if not os.path.exists(local_dir):
+        os.makedirs(local_dir, exist_ok=True)  # Create local directory if it doesn't exist
 
-    # List all files and "folders" (key prefixes) within the specified prefix (directory)
-    try:
-        response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix)
+        # List all files and "folders" (key prefixes) within the specified prefix (directory)
+        try:
+            response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix)
 
-        if 'Contents' in response:
-            for obj in response['Contents']:
-                s3_key = obj['Key']
-                relative_path = s3_key[len(s3_prefix):]  # Get the relative path after the prefix
-                local_file_path = os.path.join(local_dir, relative_path)
+            if 'Contents' in response:
+                for obj in response['Contents']:
+                    s3_key = obj['Key']
+                    relative_path = s3_key[len(s3_prefix):]  # Get the relative path after the prefix
+                    local_file_path = os.path.join(local_dir, relative_path)
 
-                if s3_key.endswith('/'):  # If the S3 key represents a folder
-                    os.makedirs(local_file_path, exist_ok=True)
-                    print(f"Created folder: {local_file_path}")
-                else:  # If the S3 key represents a file
-                    os.makedirs(os.path.dirname(local_file_path), exist_ok=True)  # Ensure the directory exists
-                    s3_client.download_file(s3_bucket, s3_key, local_file_path)
-                    print(f"Downloaded file: {local_file_path}")
-        else:
-            print(f"No files found in {s3_prefix}")
-    except NoCredentialsError:
-        print("AWS credentials not found.")
-    except ClientError as e:
-        print(f"Error accessing S3: {e}")
+                    if s3_key.endswith('/'):  # If the S3 key represents a folder
+                        os.makedirs(local_file_path, exist_ok=True)
+                    else:  # If the S3 key represents a file
+                        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)  # Ensure the directory exists
+                        s3_client.download_file(s3_bucket, s3_key, local_file_path)
+        except NoCredentialsError:
+            st.error("AWS credentials not found.")
+        except ClientError as e:
+            st.error(f"Error accessing S3: {e}")
 
-# Download models from their respective directories
-download_directory_from_s3(s3_bucket, "facebook-bart-large-cnn/", "/tmp/bart")
-download_directory_from_s3(s3_bucket, "finbert-tone/", "/tmp/finbert")
-download_directory_from_s3(s3_bucket, "en_core_web_sm/en_core_web_sm-3.7.1/", "/tmp/spacy/en_core_web_sm-3.7.1")
+# Cache the model loading process
+@st.cache_resource
+def load_models():
+    # Download models from S3 only if not present locally
+    download_directory_from_s3(s3_bucket, "facebook-bart-large-cnn/", "/tmp/bart")
+    download_directory_from_s3(s3_bucket, "finbert-tone/", "/tmp/finbert")
+    download_directory_from_s3(s3_bucket, "en_core_web_sm/en_core_web_sm-3.7.1/", "/tmp/spacy/en_core_web_sm-3.7.1")
 
-# # Load spaCy model
-spacy_model_path = "/tmp/spacy/en_core_web_sm-3.7.1"  # Path to downloaded spaCy model
-nlp = spacy.load(spacy_model_path)
+    # Load spaCy model
+    spacy_model_path = "/tmp/spacy/en_core_web_sm-3.7.1"
+    nlp = spacy.load(spacy_model_path)
 
-# Load the BART model and tokenizer
-bart_model_path = "/tmp/bart"
-tokenizer=BartTokenizer.from_pretrained(bart_model_path)
-bart_model=BartForConditionalGeneration.from_pretrained(bart_model_path)
+    # Load the BART model and tokenizer
+    bart_model_path = "/tmp/bart"
+    tokenizer = BartTokenizer.from_pretrained(bart_model_path)
+    bart_model = BartForConditionalGeneration.from_pretrained(bart_model_path)
 
-# Load the FinBERT model and tokenizer
-finbert_model_path = "/tmp/finbert"
-finbert_tokenizer=AutoTokenizer.from_pretrained(finbert_model_path)
-finbert_model=AutoModel.from_pretrained(finbert_model_path)
+    # Load the FinBERT model and tokenizer
+    finbert_model_path = "/tmp/finbert"
+    finbert_tokenizer = AutoTokenizer.from_pretrained(finbert_model_path)
+    finbert_model = AutoModel.from_pretrained(finbert_model_path)
 
-# print("Models loaded successfully.")
+    return nlp, tokenizer, bart_model, finbert_tokenizer, finbert_model
 
+# Load the models once and cache them
+nlp, tokenizer, bart_model, finbert_tokenizer, finbert_model = load_models()
 
-# Streamlit app title
-st.title("Financial Data Query Assistant")
+# Rest of your Streamlit code
+st.title("AmadeoChat - Amadeo X Ilia")
 
 # File uploader for Excel files
 uploaded_file = st.file_uploader("Choose an Excel file", type="xlsx")
